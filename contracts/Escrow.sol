@@ -44,7 +44,8 @@ contract Escrow is ReentrancyGuard{
     
     event Deposit(address indexed depositor, uint256 amount);
     event Withdrawal(address indexed to, uint256 amount);
-    event TokenWithdrawn(address , address _token, uint256 amount);
+    event TokenWithdrawn(address indexed to, address _token, uint256 amount);
+    event EtherWithdrawn(address indexed to, uint256 amount);
 
 
 
@@ -126,7 +127,7 @@ contract Escrow is ReentrancyGuard{
     }
 
     function cancelTxn (address payable _to) external {
-        require(msg.sender == owner, "Only the contract owner can cancel a transaction");
+        // require(msg.sender == owner, "Only the contract owner can cancel a transaction");
         require(balances[_to] > 0, "No funds available for cancellation");
         balances[_to] = 0;
         emit Withdrawal(_to, balances[_to]);
@@ -134,7 +135,7 @@ contract Escrow is ReentrancyGuard{
     }
 
     function withdraw () external onlyOwner {
-
+        
     }
 
 
