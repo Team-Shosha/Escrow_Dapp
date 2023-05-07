@@ -1,141 +1,95 @@
-// pragma solidity ^0.8.9;
+// SPDX-License-Identifier: GPL-3.0
+pragma solidity ^0.8.4;
 
-// import "@openzeppelin/contracts/security/ReentrancyGuard.sol";
-// import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
-// import "@openzeppelin/contracts/utils/math/SafeMath.sol";
+import "@openzeppelin/contracts/security/ReentrancyGuard.sol";
+import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import "@openzeppelin/contracts/utils/math/SafeMath.sol";
+import "@openzeppelin/contracts/access/Ownable.sol";
+import "@openzeppelin/contracts/utils/Address.sol";
 
+contract Escrow is Ownable, ReentrancyGuard {
+    using Address for address payable;
 
-// contract Escrow is ReentrancyGuard{
-//     using SafeMath for uint256;
+    uint256 public serviceFee = 7;
 
-//     address public escrowAddr;
-//     uint256 escrowFee;
-//     uint256 escrowBal;
-//     uint256 totalTxn;
-//     uint256 totalConfirmedTxn; 
-//     uint256 duration;
+    struct Payment {
+        uint256 amount;
+        address sender;
+        address receiver;
+        address token;
+        uint256 timestamp;
+        bool cancelled;
+    }
 
-//     enum Status {
-//         PAYMENT_SENT,
-//         VALIDATING,
-//         PATMENT_CLAIMED,
-//         REFUND
-        
-//     }
+    mapping(bytes20 => Payment) public payments;
 
-//     struct TxnStatus {
-//         uint256 txnId;
-//         uint256 amount;
-//         uint256 timeStamp;
-//         address sender;
-//         string purpose;
-//         Status status;
-//     }
+    event PaymentCreated(bytes20 indexed paymentId);
+    event PaymentCancelled(bytes20 indexed paymentId);
+    event PaymentReleased(bytes20 indexed paymentId);
 
-//     mapping (address => TxnStatus) addrToTxn;
-//     mapping (address => TxnStatus[]) txnOf;
-//     mapping(address => uint256) public balances;
-//     mapping(address => uint256) public etherBalances;
-//     mapping(address => mapping(address => uint256)) public releaseTimes;
-//     mapping(address => mapping(address => uint256)) public tokenBalances;
+    function createPayment(
+        bytes20 paymentId,
+        address receiver,
+        address token,
+        uint256 amount
+    ) external payable {
+        require(payments[paymentId].amount == 0, "Payment already exists");
+        require(receiver != address(0), "Invalid receiver address");
+        require(address(this).balance >= amount, "Insufficient balance");
 
-    
-//     event Deposit(address indexed depositor, uint256 amount);
-//     event Withdrawal(address indexed to, uint256 amount);
-//     event TokenWithdrawn(address indexed to, address _token, uint256 amount);
-//     event EtherWithdrawn(address indexed to, uint256 amount);
+        if (token != address(0)) {
+            require(
+                IERC20(token).allowance(msg.sender, address(this)) >= amount,
+                "Insufficient allowance"
+            );
+            require(
+                IERC20(token).transferFrom(msg.sender, address(this), amount),
+                "Token transfer failed"
+            );
+        } else {
+            require(msg.value == amount, "Incorrect ETH amount");
+        }
 
+        Payment storage payment = payments[paymentId];
+        payment.amount = amount;
+        payment.sender = msg.sender;
+        payment.receiver = receiver;
+        payment.token = token;
+        payment.timestamp = block.timestamp;
 
+        emit PaymentCreated(paymentId);
+    }
 
-//     constructor (uint256 _escrowFee) {
-//         escrowAddr = msg.sender;
-//         escrowFee = _escrowFee;
-//     }
+    function cancelPayment(bytes20 paymentId) external {
+        Payment storage payment = payments[paymentId];
+        require(payment.amount != 0, "Payment does not exist");
+        require(payment.sender == msg.sender, "Not authorized to cancel");
+        require(!payment.cancelled, "Payment already cancelled");
 
-//     modifier onlyOwner {
-//     require(msg.sender == escrowAddr, "Only Owner can call this fuunction"); 
-//     _;
-//    }
+        payment.cancelled = true;
+        payable(payment.sender).sendValue(payment.amount);
 
-//    modifier Duration{
-//     require(block.timestamp + 5 minutes == duration, "cant perform this action now");
-//     _;
-//    }
+        emit PaymentCancelled(paymentId);
+    }
 
-//     // function sendToken (address from, address to, uint256 _amount ) internal{
-//     //     require(to != address(0), "to address can't be address zero");
-//     //     TxnStatus memory _status = addrToTxn[from];
-//     //     _status.txnId = txnId++;
-//     //     checkToAddress(to);
+    function releasePayment(bytes20 paymentId) external onlyOwner {
+        Payment storage payment = payments[paymentId];
+        require(payment.amount != 0, "Payment does not exist");
+        require(!payment.cancelled, "Payment already cancelled");
+        require(
+            block.timestamp >= payment.timestamp + (5 minutes),
+            "Release time not reached"
+        );
 
-//     // }
+        uint256 amountMinusFee = (payment.amount * (100 - serviceFee)) / 100;
+        payable(payment.receiver).sendValue(amountMinusFee);
+        payable(owner()).sendValue(payment.amount - amountMinusFee);
 
-//     // function sendEth () internal{
+        emit PaymentReleased(paymentId);
+    }
 
-//     // }
-
-//     function checkToAddress(address _to) internal pure {
-//         // return (bytes(address(_to)).length == 20);
-//         // return (_to != address(0) && uint256(_to) &gt &gt, 96 == 0);
-//         require(_to != address(0), "Receiver address cannot be zero.");
-//         require(bytes20(_to) == bytes20(_to), "Invalid receiver address length.");
-//     }
-    
-
-//     function sendFunds (address _token, address payable to_ ) external payable{
-//         // IERC20 token = IERC20(_token);
-//         require(to_ != address(0), "to address can't be address zero");
-//         require(to_ != address(0), "Invalid beneficiary address");
-//         require(to_ != msg.sender, "Sender cannot be beneficiary");
-//         checkToAddress(to_);
-//         if (_token == address(0)) {
-//             require(msg.value > 0, "Deposit amount must be greater than zero");
-//             balances[to_] += msg.value;
-//             emit Deposit(msg.sender, msg.value);
-//         } else {
-//             uint256 amount = IERC20(_token).balanceOf(msg.sender);
-//             require(amount > 0, "Insufficient token balance");
-//             require(IERC20(_token).transferFrom(msg.sender, address(this), amount), "Token transfer failed");
-//             balances[to_] += amount;
-//             emit Deposit(msg.sender, amount);
-//         }
-        
-
-//     }
-
-//     function claimFunds (address _token) external nonReentrant {
-//         if(_token == address(0)){
-//         require(tokenBalances[msg.sender][_token] > 0, "No token balance to withdraw.");
-//         require(block.timestamp >= releaseTimes[msg.sender][_token], "Release time not reached.");
-//         uint256 amount = tokenBalances[msg.sender][_token];
-//         tokenBalances[msg.sender][_token] = 0;
-//         IERC20(_token).transfer(msg.sender, amount);
-//         emit TokenWithdrawn(msg.sender, _token, amount);
-    
-
-//         } else {
-//         require(etherBalances[msg.sender] > 0, "No Ether balance to withdraw.");
-//         require(block.timestamp >= releaseTimes[msg.sender], "Release time not reached.");
-//         uint256 amount = etherBalances[msg.sender];
-//         etherBalances[msg.sender] = 0;
-//         payable(msg.sender).transfer(amount);
-//         emit EtherWithdrawn(msg.sender, amount);
-//         }
-        
-//     }
-
-//     function cancelTxn (address payable _to) external {
-//         // require(msg.sender == owner, "Only the contract owner can cancel a transaction");
-//         require(balances[_to] > 0, "No funds available for cancellation");
-//         balances[_to] = 0;
-//         emit Withdrawal(_to, balances[_to]);
-
-//     }
-
-//     function withdraw () external onlyOwner {
-        
-//     }
-
-
-
-// }
+    function setServiceFee(uint256 _serviceFee) external onlyOwner {
+        require(_serviceFee <= 10, "Service fee must be <= 10%");
+        serviceFee = _serviceFee;
+    }
+}
