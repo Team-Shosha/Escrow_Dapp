@@ -1,18 +1,18 @@
-// SPDX-License-Identifier: GPL-3.0
-pragma solidity ^0.8.4;
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
 
-import "@openzeppelin/contracts/security/ReentrancyGuard.sol";
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
-import "@openzeppelin/contracts/utils/math/SafeMath.sol";
 import "@openzeppelin/contracts/access/Ownable.sol";
 import "@openzeppelin/contracts/utils/Address.sol";
 
-contract Escrow is Ownable, ReentrancyGuard {
+contract Escrow is Ownable {
     using Address for address payable;
 
-    uint256 public serviceFee = 7;
+    uint256 public baseFeePercentage;
+    uint256 public feeMultiplier;
 
     struct Payment {
+        uint256 id;
         uint256 amount;
         address sender;
         address receiver;
@@ -21,46 +21,43 @@ contract Escrow is Ownable, ReentrancyGuard {
         bool cancelled;
     }
 
-    mapping(bytes20 => Payment) public payments;
+    mapping(uint256 => Payment) public payments;
+    uint256[] public paymentIds;
 
-    event PaymentCreated(bytes20 indexed paymentId);
-    event PaymentCancelled(bytes20 indexed paymentId);
-    event PaymentReleased(bytes20 indexed paymentId);
+    event PaymentCreated(uint256 indexed paymentId);
+    event PaymentCancelled(uint256 indexed paymentId);
+    event PaymentReleased(uint256 indexed paymentId);
 
-    function createPayment(
-        bytes20 paymentId,
-        address receiver,
-        address token,
-        uint256 amount
-    ) external payable {
-        require(payments[paymentId].amount == 0, "Payment already exists");
+    constructor(uint256 _baseFeePercentage, uint256 _feeMultiplier) {
+        require(_baseFeePercentage <= 10, "Base fee must be <= 10%");
+        baseFeePercentage = _baseFeePercentage;
+        feeMultiplier = _feeMultiplier;
+    }
+
+    function createPayment(address receiver, address token, uint256 amount) external payable {
         require(receiver != address(0), "Invalid receiver address");
-        require(address(this).balance >= amount, "Insufficient balance");
+        require(amount > 0, "Amount must be greater than zero");
 
-        if (token != address(0)) {
-            require(
-                IERC20(token).allowance(msg.sender, address(this)) >= amount,
-                "Insufficient allowance"
-            );
-            require(
-                IERC20(token).transferFrom(msg.sender, address(this), amount),
-                "Token transfer failed"
-            );
-        } else {
-            require(msg.value == amount, "Incorrect ETH amount");
+        if (msg.value == 0) {
+            require(msg.sender != receiver, "Cannot create payment to yourself");
         }
 
-        Payment storage payment = payments[paymentId];
+        uint256 newPaymentId = paymentIds.length;
+        Payment storage payment = payments[newPaymentId];
+        payment.id = newPaymentId;
         payment.amount = amount;
         payment.sender = msg.sender;
         payment.receiver = receiver;
         payment.token = token;
         payment.timestamp = block.timestamp;
+        payment.cancelled = false;
 
-        emit PaymentCreated(paymentId);
+        paymentIds.push(newPaymentId);
+
+        emit PaymentCreated(newPaymentId);
     }
 
-    function cancelPayment(bytes20 paymentId) external {
+    function cancelPayment(uint256 paymentId) external {
         Payment storage payment = payments[paymentId];
         require(payment.amount != 0, "Payment does not exist");
         require(payment.sender == msg.sender, "Not authorized to cancel");
@@ -72,7 +69,7 @@ contract Escrow is Ownable, ReentrancyGuard {
         emit PaymentCancelled(paymentId);
     }
 
-    function releasePayment(bytes20 paymentId) external onlyOwner {
+    function releasePayment(uint256 paymentId) external onlyOwner {
         Payment storage payment = payments[paymentId];
         require(payment.amount != 0, "Payment does not exist");
         require(!payment.cancelled, "Payment already cancelled");
@@ -81,15 +78,21 @@ contract Escrow is Ownable, ReentrancyGuard {
             "Release time not reached"
         );
 
-        uint256 amountMinusFee = (payment.amount * (100 - serviceFee)) / 100;
+        uint256 feeAmount = calculateFee(payment.amount);
+        uint256 amountMinusFee = payment.amount - feeAmount;
+
         payable(payment.receiver).sendValue(amountMinusFee);
-        payable(owner()).sendValue(payment.amount - amountMinusFee);
+        payable(owner()).sendValue(feeAmount);
 
         emit PaymentReleased(paymentId);
     }
 
-    function setServiceFee(uint256 _serviceFee) external onlyOwner {
-        require(_serviceFee <= 10, "Service fee must be <= 10%");
-        serviceFee = _serviceFee;
+    function calculateFee(uint256 amount) internal view returns (uint256) {
+        return (amount * baseFeePercentage * feeMultiplier) / 10000;
+    }
+
+    function getLastPaymentId() public view returns (uint256) {
+        require(paymentIds.length > 0, "No payment exists");
+        return paymentIds[paymentIds.length - 1];
     }
 }
