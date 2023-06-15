@@ -4,12 +4,15 @@ pragma solidity ^0.8.0;
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/access/Ownable.sol";
 import "@openzeppelin/contracts/utils/Address.sol";
+import "@openzeppelin/contracts/security/ReentrancyGuard.sol";
 
-contract Escrow is Ownable {
-    using Address for address payable;
+
+contract Escrow is Ownable, ReentrancyGuard {
+    using Address for address;
 
     uint256 public baseFeePercentage;
     uint256 public feeMultiplier;
+    // bytes32 public 
 
     struct Payment {
         uint256 id;
@@ -21,7 +24,19 @@ contract Escrow is Ownable {
         bool cancelled;
     }
 
+    struct trackReceiverAddress{
+        address receiver;
+        bytes32 pin;
+    }
+
+    struct trackReceiverAmount{
+        address receiver;
+        uint256 amount;
+    }
+
     mapping(uint256 => Payment) public payments;
+    mapping (address => trackReceiverAddress) private trackReceiverAddresses;
+    mapping (bytes32 => trackReceiverAmount) private trackReceiverAmounts;
     uint256[] public paymentIds;
 
     event PaymentCreated(uint256 indexed paymentId);
@@ -29,7 +44,7 @@ contract Escrow is Ownable {
     event PaymentReleased(uint256 indexed paymentId);
 
     constructor(uint256 _baseFeePercentage, uint256 _feeMultiplier) {
-        require(_baseFeePercentage <= 10, "Base fee must be <= 10%");
+        require(_baseFeePercentage <= 10, "Base fee must be <= 2%");
         baseFeePercentage = _baseFeePercentage;
         feeMultiplier = _feeMultiplier;
     }
@@ -57,19 +72,19 @@ contract Escrow is Ownable {
         emit PaymentCreated(newPaymentId);
     }
 
-    function cancelPayment(uint256 paymentId) external {
+    function cancelPayment(uint256 paymentId) external nonReentrant {
         Payment storage payment = payments[paymentId];
         require(payment.amount != 0, "Payment does not exist");
         require(payment.sender == msg.sender, "Not authorized to cancel");
         require(!payment.cancelled, "Payment already cancelled");
 
         payment.cancelled = true;
-        payable(payment.sender).sendValue(payment.amount);
+        payable(payment.sender).transfer(payment.amount);
 
         emit PaymentCancelled(paymentId);
     }
 
-    function releasePayment(uint256 paymentId) external onlyOwner {
+    function releasePayment(uint256 paymentId) external onlyOwner nonReentrant {
         Payment storage payment = payments[paymentId];
         require(payment.amount != 0, "Payment does not exist");
         require(!payment.cancelled, "Payment already cancelled");
@@ -81,8 +96,8 @@ contract Escrow is Ownable {
         uint256 feeAmount = calculateFee(payment.amount);
         uint256 amountMinusFee = payment.amount - feeAmount;
 
-        payable(payment.receiver).sendValue(amountMinusFee);
-        payable(owner()).sendValue(feeAmount);
+        payable(payment.receiver).transfer(amountMinusFee);
+        payable(owner()).transfer(feeAmount);
 
         emit PaymentReleased(paymentId);
     }
@@ -94,5 +109,11 @@ contract Escrow is Ownable {
     function getLastPaymentId() public view returns (uint256) {
         require(paymentIds.length > 0, "No payment exists");
         return paymentIds[paymentIds.length - 1];
+    }
+
+    function generatePin () internal returns (bytes32){
+        
+
+
     }
 }
